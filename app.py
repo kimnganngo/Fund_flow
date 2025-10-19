@@ -11,6 +11,19 @@ from src.processing import (
 )
 from src.graph import build_graph, annotate_nodes_with_stats, detect_communities, edges_dataframe, nodes_dataframe
 
+# --- Helpers đơn vị VND -> tỷ đồng ---
+def to_billion(x):
+    try:
+        return float(x) / 1_000_000_000.0
+    except Exception:
+        return 0.0
+
+def fmt_ty(x, digits=2):
+    try:
+        return f"{to_billion(x):,.{digits}f} tỷ"
+    except Exception:
+        return "0 tỷ"
+
 st.set_page_config(page_title="FlowLink • Phân tích nguồn tiền", layout="wide")
 
 st.title("💸 FlowLink – Phân tích mối quan hệ nguồn tiền giữa các tài khoản chứng khoán")
@@ -200,6 +213,13 @@ st.subheader("📊 Thống kê nhanh")
 
 edges_df = edges_dataframe(G)
 nodes_df = nodes_dataframe(G)
+
+# Thêm cột tỷ đồng cho bảng
+if not edges_df.empty:
+    edges_df["Tong_tien_ty"] = edges_df["Tong_tien"].apply(to_billion)
+if not nodes_df.empty:
+    nodes_df["Amount_in_ty"]  = nodes_df["Amount_in"].apply(to_billion)
+    nodes_df["Amount_out_ty"] = nodes_df["Amount_out"].apply(to_billion)
 
 col1, col2, col3 = st.columns(3)
 with col1:
