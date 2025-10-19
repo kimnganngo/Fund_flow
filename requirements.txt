@@ -1,0 +1,10 @@
+streamlit
+pandas
+unidecode
+networkx
+pyvis
+plotly
+openpyxl
+
+python-louvain
+kaleido
