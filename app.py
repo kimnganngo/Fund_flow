@@ -130,46 +130,57 @@ for n, cid in comm_map.items():
     G.nodes[n]["community"] = cid
 
 # -------- Visualization --------
-if graph_engine == "PyVis (HTML)" and not st.session_state.get("force_plotly", False):
-    from pyvis.network import Network
-    net = Network(height="650px", width="100%", bgcolor="#ffffff", font_color="#222222", directed=True)
-    net.barnes_hut(gravity=-20000, spring_length=170, damping=0.85)
+import networkx as nx
+palette = ["#ff6b6b", "#845ef7", "#339af0", "#40c057", "#fab005", "#e64980", "#20c997", "#495057"]
 
-    COLOR_SRC = "#2b8a3e"
-    COLOR_ACC = "#1971c2"
-    palette = ["#ff6b6b", "#845ef7", "#339af0", "#40c057", "#fab005", "#e64980", "#20c997", "#495057"]
+if graph_mode == "Sankey (trái→phải)":
+    # Chuẩn bị node list (nguồn + tài khoản), link theo tỷ đồng
+    sources = sorted({G.nodes[n]["label"] for n, d in G.nodes(data=True) if d.get("kind") == "Nguon"})
+    accounts = sorted({G.nodes[n]["label"] for n, d in G.nodes(data=True) if d.get("kind") == "TaiKhoan"})
+    labels = sources + accounts
+    idx = {lab: i for i, lab in enumerate(labels)}
 
-    for n, d in G.nodes(data=True):
-        label = d.get("label", n)
-        size = max(10, (d.get("amount_in", 0) + d.get("amount_out", 0)) ** 0.25)
-        cid = d.get("community")
-        color = palette[cid % len(palette)] if cid is not None else (COLOR_SRC if d.get("kind") == "Nguon" else COLOR_ACC)
-        title = (
-            f"{d.get('kind')} | IN: {d.get('amount_in',0):,} | OUT: {d.get('amount_out',0):,} | "
-            f"BC: {d.get('betweenness',0):.4f} | C: {cid}"
+    link_src = []
+    link_tgt = []
+    link_val = []
+    link_hover = []
+
+    for u, v, d in G.edges(data=True):
+        src_label = G.nodes[u].get("label", "")
+        dst_label = G.nodes[v].get("label", "")
+        if src_label in idx and dst_label in idx:
+            val_ty = to_billion(d.get("Tong_tien", 0))
+            if val_ty <= 0:
+                continue
+            link_src.append(idx[src_label])
+            link_tgt.append(idx[dst_label])
+            link_val.append(val_ty)
+            link_hover.append(
+                f"{src_label} → {dst_label}<br>{fmt_ty(d.get('Tong_tien', 0))} | Lệnh: {d.get('So_lenh',0)} | {d.get('NoP_Rut','')}"
+            )
+
+    node_colors = (["#2b8a3e"] * len(sources)) + (["#1971c2"] * len(accounts))
+
+    fig = go.Figure(data=[go.Sankey(
+        arrangement="snap",
+        orientation="h",
+        node=dict(
+            pad=25, thickness=18,
+            label=labels,
+            color=node_colors
+        ),
+        link=dict(
+            source=link_src, target=link_tgt, value=link_val,
+            hovertemplate="%{customdata}<extra></extra>",
+            customdata=link_hover
         )
-        net.add_node(n, label=label, title=title, size=size, color=color)
+    )])
+    fig.update_layout(margin=dict(l=10,r=10,t=10,b=10), height=650)
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Giá trị cạnh hiển thị theo **tỷ đồng** (value trong Sankey = tỷ).")
 
-    for u, v, ed in G.edges(data=True):
-        w = ed.get("Tong_tien", 0)
-        width = max(1, min(10, w / 1_000_000_000))
-        title = f"{G.nodes[u].get('label')} → {G.nodes[v].get('label')} | {w:,} VND | Lệnh: {ed.get('So_lenh', 0)} | {ed.get('NoP_Rut', '')}"
-        net.add_edge(u, v, value=w, title=title, width=width)
-
-    # ✅ KHÔNG dùng net.show(); dùng write_html + notebook=False
-    try:
-        html_path = "network.html"
-        net.write_html(html_path, notebook=False)
-        with open(html_path, "r", encoding="utf-8") as f:
-            html = f.read()
-        st.components.v1.html(html, height=680, scrolling=True)
-    except Exception as e:
-        st.warning(f"PyVis render gặp lỗi: {str(e)}. Tự động chuyển sang Plotly.")
-        st.session_state["force_plotly"] = True
-
-else:
-    # Plotly fallback (và dùng để xuất PNG)
-    import networkx as nx
+elif graph_mode == "Network (community)":
+    # Force layout + color theo community, hiển thị số tiền theo tỷ trong hover
     pos = nx.spring_layout(G.to_undirected(), seed=42, k=0.5)
     edge_x, edge_y = [], []
     for u, v in G.edges():
@@ -179,15 +190,16 @@ else:
     edge_trace = go.Scatter(x=edge_x, y=edge_y, mode="lines", hoverinfo="none")
 
     node_x, node_y, text, size, color = [], [], [], [], []
-    palette = ["#ff6b6b", "#845ef7", "#339af0", "#40c057", "#fab005", "#e64980", "#20c997", "#495057"]
     for n, d in G.nodes(data=True):
         x, y = pos[n]
         node_x.append(x); node_y.append(y)
-        text.append(
-            f"{d.get('label')}<br>IN: {d.get('amount_in',0):,} | OUT: {d.get('amount_out',0):,} | "
+        info = (
+            f"{d.get('label')}<br>"
+            f"IN: {fmt_ty(d.get('amount_in',0))} | OUT: {fmt_ty(d.get('amount_out',0))} | "
             f"BC: {d.get('betweenness',0):.4f} | C: {d.get('community')}"
         )
-        size.append(max(10, (d.get('amount_in',0)+d.get('amount_out',0)) ** 0.25) * 3)
+        text.append(info)
+        size.append(max(12, (d.get('amount_in',0)+d.get('amount_out',0)) ** 0.25) * 3)
         cid = d.get("community")
         color.append(palette[(cid if cid is not None else 0) % len(palette)])
 
@@ -197,15 +209,55 @@ else:
     )
     node_trace.marker.color = color
 
-    fig = go.Figure(
-        data=[edge_trace, node_trace],
-        layout=go.Layout(showlegend=False, hovermode="closest", margin=dict(b=20, l=20, r=20, t=20))
-    )
-    # Streamlit mới vẫn chấp nhận auto sizing với Plotly chart này
+    fig = go.Figure(data=[edge_trace, node_trace],
+                    layout=go.Layout(showlegend=False, hovermode="closest",
+                                     margin=dict(b=20,l=20,r=20,t=20), height=650))
     st.plotly_chart(fig, use_container_width=True)
-    # PNG export (cần 'kaleido' trong requirements)
+    # PNG export (giữ đơn vị tỷ đồng ở hover)
     png_bytes = fig.to_image(format="png", scale=2)
     st.download_button("⬇️ Tải ảnh PNG của đồ thị", data=png_bytes, file_name="graph.png", mime="image/png")
+
+else:  # PyVis (hierarchical)
+    from pyvis.network import Network
+    net = Network(height="650px", width="100%", bgcolor="#ffffff", font_color="#222222", directed=True)
+
+    # Bật layout hierarchical trái→phải + tắt physics để node không chồng chéo
+    net.set_options("""
+    const options = {
+      layout: { hierarchical: { enabled: true, direction: 'LR', sortMethod: 'hubsize', nodeSpacing: 220, levelSeparation: 240 } },
+      physics: { enabled: false },
+      edges: { arrows: { to: { enabled: true } }, smooth: { type: 'cubicBezier' } }
+    }
+    """)
+
+    for n, d in G.nodes(data=True):
+        label = d.get("label", n)
+        size = max(10, (d.get("amount_in", 0) + d.get("amount_out", 0)) ** 0.25)
+        cid = d.get("community")
+        color = palette[cid % len(palette)] if cid is not None else ("#2b8a3e" if d.get("kind") == "Nguon" else "#1971c2")
+        title = f"{d.get('kind')} | IN: {fmt_ty(d.get('amount_in',0))} | OUT: {fmt_ty(d.get('amount_out',0))} | BC: {d.get('betweenness',0):.4f} | C: {cid}"
+
+        # level: nguồn = 0, tài khoản = 1 để đảm bảo trái→phải
+        level = 0 if d.get("kind") == "Nguon" else 1
+        net.add_node(n, label=label, title=title, size=size, color=color, level=level)
+
+    for u, v, ed in G.edges(data=True):
+        w = ed.get("Tong_tien", 0)
+        width = max(1, min(10, w / 1_000_000_000))
+        title = f"{G.nodes[u].get('label')} → {G.nodes[v].get('label')} | {fmt_ty(w)} | Lệnh: {ed.get('So_lenh', 0)} | {ed.get('NoP_Rut', '')}"
+        net.add_edge(u, v, value=to_billion(w), title=title)
+
+    try:
+        html_path = "network.html"
+        net.write_html(html_path, notebook=False)
+        with open(html_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        st.components.v1.html(html, height=680, scrolling=True)
+    except Exception as e:
+        st.warning(f"PyVis render gặp lỗi: {str(e)}. Tự động chuyển sang chế độ Sankey.")
+        st.session_state["force_plotly"] = True
+        st.experimental_rerun()
+
 
 # --------------- Tables & Alerts ---------------
 st.markdown("---")
