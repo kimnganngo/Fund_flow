@@ -117,7 +117,7 @@ for n, cid in comm_map.items():
     G.nodes[n]["community"] = cid
 
 # -------- Visualization --------
-if graph_engine == "PyVis (HTML)":
+if graph_engine == "PyVis (HTML)" and not st.session_state.get("force_plotly", False):
     from pyvis.network import Network
     net = Network(height="650px", width="100%", bgcolor="#ffffff", font_color="#222222", directed=True)
     net.barnes_hut(gravity=-20000, spring_length=170, damping=0.85)
@@ -129,11 +129,12 @@ if graph_engine == "PyVis (HTML)":
     for n, d in G.nodes(data=True):
         label = d.get("label", n)
         size = max(10, (d.get("amount_in", 0) + d.get("amount_out", 0)) ** 0.25)
-        color = COLOR_SRC if d.get("kind") == "Nguon" else COLOR_ACC
         cid = d.get("community")
-        if cid is not None:
-            color = palette[cid % len(palette)]
-        title = f"{d.get('kind')} | IN: {d.get('amount_in',0):,} | OUT: {d.get('amount_out',0):,} | BC: {d.get('betweenness',0):.4f} | C: {cid}"
+        color = palette[cid % len(palette)] if cid is not None else (COLOR_SRC if d.get("kind") == "Nguon" else COLOR_ACC)
+        title = (
+            f"{d.get('kind')} | IN: {d.get('amount_in',0):,} | OUT: {d.get('amount_out',0):,} | "
+            f"BC: {d.get('betweenness',0):.4f} | C: {cid}"
+        )
         net.add_node(n, label=label, title=title, size=size, color=color)
 
     for u, v, ed in G.edges(data=True):
@@ -142,46 +143,54 @@ if graph_engine == "PyVis (HTML)":
         title = f"{G.nodes[u].get('label')} → {G.nodes[v].get('label')} | {w:,} VND | Lệnh: {ed.get('So_lenh', 0)} | {ed.get('NoP_Rut', '')}"
         net.add_edge(u, v, value=w, title=title, width=width)
 
-    html_path = "network.html"
-    net.show(html_path)
-    with open(html_path, "r", encoding="utf-8") as f:
-        html = f.read()
-    st.components.v1.html(html, height=680, scrolling=True)
+    # ✅ KHÔNG dùng net.show(); dùng write_html + notebook=False
+    try:
+        html_path = "network.html"
+        net.write_html(html_path, notebook=False)
+        with open(html_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        st.components.v1.html(html, height=680, scrolling=True)
+    except Exception as e:
+        st.warning(f"PyVis render gặp lỗi: {str(e)}. Tự động chuyển sang Plotly.")
+        st.session_state["force_plotly"] = True
+
 else:
-    # Plotly scatter for PNG export
+    # Plotly fallback (và dùng để xuất PNG)
     import networkx as nx
     pos = nx.spring_layout(G.to_undirected(), seed=42, k=0.5)
     edge_x, edge_y = [], []
     for u, v in G.edges():
-        x0, y0 = pos[u]
-        x1, y1 = pos[v]
+        x0, y0 = pos[u]; x1, y1 = pos[v]
         edge_x += [x0, x1, None]
         edge_y += [y0, y1, None]
-
-    edge_trace = go.Scatter(x=edge_x, y=edge_y, mode='lines', hoverinfo='none')
+    edge_trace = go.Scatter(x=edge_x, y=edge_y, mode="lines", hoverinfo="none")
 
     node_x, node_y, text, size, color = [], [], [], [], []
     palette = ["#ff6b6b", "#845ef7", "#339af0", "#40c057", "#fab005", "#e64980", "#20c997", "#495057"]
     for n, d in G.nodes(data=True):
         x, y = pos[n]
         node_x.append(x); node_y.append(y)
-        text.append(f"{d.get('label')}<br>IN: {d.get('amount_in',0):,} | OUT: {d.get('amount_out',0):,} | BC: {d.get('betweenness',0):.4f} | C: {d.get('community')}")
-        size.append(max(10, (d.get('amount_in',0)+d.get('amount_out',0)) ** 0.25)*3)
+        text.append(
+            f"{d.get('label')}<br>IN: {d.get('amount_in',0):,} | OUT: {d.get('amount_out',0):,} | "
+            f"BC: {d.get('betweenness',0):.4f} | C: {d.get('community')}"
+        )
+        size.append(max(10, (d.get('amount_in',0)+d.get('amount_out',0)) ** 0.25) * 3)
         cid = d.get("community")
         color.append(palette[(cid if cid is not None else 0) % len(palette)])
 
     node_trace = go.Scatter(
-        x=node_x, y=node_y, mode='markers', text=text, hoverinfo='text',
+        x=node_x, y=node_y, mode="markers", text=text, hoverinfo="text",
         marker=dict(size=size, line=dict(width=1))
     )
     node_trace.marker.color = color
 
-    fig = go.Figure(data=[edge_trace, node_trace],
-                    layout=go.Layout(showlegend=False, hovermode='closest',
-                                     margin=dict(b=20,l=20,r=20,t=20)))
+    fig = go.Figure(
+        data=[edge_trace, node_trace],
+        layout=go.Layout(showlegend=False, hovermode="closest", margin=dict(b=20, l=20, r=20, t=20))
+    )
+    # Streamlit mới vẫn chấp nhận auto sizing với Plotly chart này
     st.plotly_chart(fig, use_container_width=True)
-
-    # PNG export via kaleido
+    # PNG export (cần 'kaleido' trong requirements)
     png_bytes = fig.to_image(format="png", scale=2)
     st.download_button("⬇️ Tải ảnh PNG của đồ thị", data=png_bytes, file_name="graph.png", mime="image/png")
 
